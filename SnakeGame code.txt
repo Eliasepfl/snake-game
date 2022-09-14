@@ -1,0 +1,619 @@
+;    set game state memory location
+.equ    HEAD_X,         0x1000  ; Snake head's position on x
+.equ    HEAD_Y,         0x1004  ; Snake head's position on y
+.equ    TAIL_X,         0x1008  ; Snake tail's position on x
+.equ    TAIL_Y,         0x100C  ; Snake tail's position on Y
+.equ    SCORE,          0x1010  ; Score address
+.equ    GSA,            0x1014  ; Game state array address
+
+.equ    CP_VALID,       0x1200  ; Whether the checkpoint is valid.
+.equ    CP_HEAD_X,      0x1204  ; Snake head's X coordinate. (Checkpoint)
+.equ    CP_HEAD_Y,      0x1208  ; Snake head's Y coordinate. (Checkpoint)
+.equ    CP_TAIL_X,      0x120C  ; Snake tail's X coordinate. (Checkpoint)
+.equ    CP_TAIL_Y,      0x1210  ; Snake tail's Y coordinate. (Checkpoint)
+.equ    CP_SCORE,       0x1214  ; Score. (Checkpoint)
+.equ    CP_GSA,         0x1218  ; GSA. (Checkpoint)
+
+.equ    LEDS,           0x2000  ; LED address
+.equ    SEVEN_SEGS,     0x1198  ; 7-segment display addresses
+.equ    RANDOM_NUM,     0x2010  ; Random number generator address
+.equ    BUTTONS,        0x2030  ; Buttons addresses
+
+; button state
+.equ    BUTTON_NONE,    0
+.equ    BUTTON_LEFT,    1
+.equ    BUTTON_UP,      2
+.equ    BUTTON_DOWN,    3
+.equ    BUTTON_RIGHT,   4
+.equ    BUTTON_CHECKPOINT,    5
+
+; array state
+.equ    DIR_LEFT,       1       ; leftward direction
+.equ    DIR_UP,         2       ; upward direction
+.equ    DIR_DOWN,       3       ; downward direction
+.equ    DIR_RIGHT,      4       ; rightward direction
+.equ    FOOD,           5       ; food
+
+; constants
+.equ    NB_ROWS,        8       ; number of rows
+.equ    NB_COLS,        12      ; number of columns
+.equ    NB_CELLS,       96      ; number of cells in GSA
+.equ    RET_ATE_FOOD,   1       ; return value for hit_test when food was eaten
+.equ    RET_COLLISION,  2       ; return value for hit_test when a collision was detected
+.equ    ARG_HUNGRY,     0       ; a0 argument for move_snake when food wasn't eaten
+.equ    ARG_FED,        1       ; a0 argument for move_snake when food was eaten
+
+
+; initialize stack pointer
+addi    sp, zero, LEDS
+
+
+main:
+; TODO: Finish this procedure.
+addi sp, sp, -4
+stw ra, 0(sp)
+stw zero, CP_VALID(zero)
+    init:
+    call init_game
+
+    get_inp:
+	call wait
+    call get_input
+    addi t7,zero,5
+    beq v0,t7,RES_CP
+    br hit
+
+    RES_CP:
+    call restore_checkpoint
+    beq v0,zero,get_inp
+    br blink
+
+    blink:
+    call blink_score
+    br one
+
+    one:
+    call clear_leds
+    call draw_array
+    br get_inp
+
+    hit:
+    call hit_test
+    addi t1,zero,1
+    addi t2,zero,2
+    beq t1,v0,food
+    beq t2,v0,init
+    br move
+
+    food:
+	addi a0, zero, 1
+    ldw t4,SCORE(zero)
+    addi t4,t4,1
+    stw t4,SCORE(zero)
+    call display_score
+    call move_snake
+    call create_food
+    br CP_save
+
+    CP_save:
+    call save_checkpoint
+    beq v0,zero,one
+    br two
+
+    two:
+    call blink_score
+    call clear_leds
+    call draw_array
+    br get_inp
+
+    move:
+    call move_snake
+    br one 
+	
+	ldw ra,0(sp)
+	addi sp,sp,4
+; arguments
+;     none
+;
+; return values
+;     This procedure should never return.
+
+; BEGIN: clear_leds
+clear_leds:
+
+	stw zero, LEDS(zero)
+	stw zero, LEDS+4(zero)
+	stw zero, LEDS+8(zero)
+	ret
+
+; END: clear_leds
+
+
+; BEGIN: set_pixel
+set_pixel:
+	
+	andi t0, a0, 3
+	slli t0, t0, 3
+	add t1, t0, a1 ;index
+	andi t3, a0, 0b1100
+
+	addi t6, zero, 1 
+	sll t5, t6, t1
+	ldw t4, LEDS(t3)
+	or t2, t4, t5
+	stw t2, LEDS(t3)
+
+	ret 
+
+; END: set_pixel
+
+
+
+
+; BEGIN: display_score
+display_score:
+ldw t0,SCORE(zero)
+add t7,zero,zero
+
+    for_counter_100:   ;modulo 100
+    addi t0,t0,-100
+    cmpgei t2,t0,0
+    bne t2,zero,for_counter_100
+
+addi t0,t0,100
+
+    for_counter_10:  ; modulo 10
+    addi t7, t7,1     ; trouver le chiffre de gauche
+    addi t0,t0,-10
+    cmpgei t2,t0,0
+    bne t2,zero,for_counter_10
+
+addi t7,t7,-1
+addi t0,t0,10      ; trouver le chiffre de droite
+
+slli t7,t7,2 ; word donc x4
+slli t0,t0,2
+
+ldw t3, digit_map(t7)  ; chiffre de gauche
+ldw t5, digit_map(t0)  ; chiffre de droite
+ldw t4,digit_map(zero)
+ldw t6,digit_map(zero)
+
+stw t5, SEVEN_SEGS+12(zero) ; on store le premier chiffre à la led la plus a droite
+stw t3, SEVEN_SEGS+8(zero) ; on le deuxieme à la led a sa gauche
+stw t4, SEVEN_SEGS+4(zero) ; on mets les deux chiffres les plus à gauche à zéro
+stw t6, SEVEN_SEGS(zero)
+ret
+; END: display_score
+
+
+; BEGIN: init_game
+init_game:
+
+addi sp, sp, -4
+stw ra, 0(sp) 
+
+addi t0,zero,0
+addi t1,zero,384
+
+loop_clear_GSA:
+stw zero, GSA(t0)
+addi t0,t0,4
+bne t0,t1,loop_clear_GSA
+
+addi t0, zero, DIR_RIGHT
+stw t0, GSA(zero)
+
+
+stw zero, HEAD_X(zero)
+stw zero, HEAD_Y(zero)
+stw zero, TAIL_X(zero)
+stw zero, TAIL_Y(zero)
+stw zero, SCORE(zero)
+
+call display_score
+call create_food
+call clear_leds
+call draw_array 
+
+
+
+ldw ra,0(sp)
+addi sp,sp,4
+ret
+
+; END: init_game
+
+
+; BEGIN: create_food
+create_food:
+
+ldw t0, RANDOM_NUM(zero)
+andi t0, t0, 0b11111111
+cmplti t2, t0, 96
+beq t2, zero, create_food; index > 95
+
+
+slli t0, t0, 2
+ldw t3, GSA(t0)
+bne t3, zero, create_food
+
+addi t4, zero, 5
+stw t4, GSA(t0)
+ret
+
+; END: create_food
+
+
+
+; BEGIN: hit_test
+hit_test:
+
+addi v0, zero, 0
+
+ldw t0, HEAD_X(zero)
+ldw t1, HEAD_Y(zero)
+
+slli t2, t0, 3
+add t3, t2, t1 ; trouver la tete prochaine
+slli t3, t3, 2 ;index head 
+
+ldw t4, GSA(t3)
+cmpeqi t0, t4, 0b0001 ;move left head
+cmpeqi t1, t4, 0b0010 ;move up head
+cmpeqi t2, t4, 0b0011 ;move down head 
+cmpeqi t3, t4, 0b0100 ;move right head
+
+ldw t6, HEAD_X(zero)
+ldw t7, HEAD_Y(zero)
+sub t6, t6, t0 ;HEAD_X - t0
+add t6, t6, t3 ;HEAD_X + t3
+sub t7, t7, t1 ;HEAD_Y - t1
+add t7, t7, t2 ;HEAD_Y + t2
+; t6 is the next head_x, t7 is the next head_y
+
+addi t2, zero, 12 ;max x
+addi t3, zero, 8 ;max y
+bge t6, t2, game_end
+bge t7, t3, game_end
+blt t6, zero, game_end
+blt t7, zero, game_end
+
+slli t2, t6, 3
+add t3, t2, t7 ; trouver la tete prochaine
+slli t3, t3, 2 ;index head 
+ldw t4, GSA(t3)
+addi t5, zero, 5 ;food
+beq t4, t5, score_inc
+
+bne t4, zero, game_end
+
+addi v0, zero, 0
+ret
+
+game_end:
+addi v0, zero, 2
+ret
+
+score_inc:
+addi v0, zero, 1
+ret
+; END: hit_test
+
+
+; BEGIN: get_input
+get_input:
+ldw t0, BUTTONS+4(zero) ; load la valeur du button
+stw zero,BUTTONS+4(zero) ; mettre edgecapture a 0
+ldw t2, HEAD_X(zero)
+ldw t3, HEAD_Y(zero)
+
+slli t2, t2, 3 ; x8
+add t5, t2, t3 ; = index  (x8 + y)
+slli t5,t5,2
+ldw t4, GSA(t5) ; the old value
+
+andi t1,t0,0b10000 ; on masque le bit 4 pour l'avoir séparément / checkpoint 
+addi v0, zero, 5
+bne t1, zero, exit ; test si la valeur est égale à 0, si elle ne l'est pas, on va directement tester le bit acitvé 
+
+boutton1: ;haut
+andi t1,t0,0b00010
+addi v0,zero,2
+bne t1, zero, test_opposite_value
+
+boutton3: ;droite
+andi t1,t0,0b01000
+addi v0,zero,4
+bne t1, zero, test_opposite_value
+
+boutton2: ;bas
+andi t1,t0,0b00100
+addi v0,zero,3
+bne t1, zero, test_opposite_value
+
+boutton4: ;gauche
+andi t1,t0,0b00001    ; new value
+addi v0,zero,1
+beq t1, zero, exit    ; si la value est égale à 0, alors on exit le programme, sans passer automatiquement par test_opposite_value
+
+test_opposite_value:
+
+add t6, t4, v0 ;we add values to check if sum is equal to 5 (left = 1 and right = 4 // down = 3 and up = 2)
+cmpeqi t7, t6, 5 	
+bne t7,zero, exit  ; if t3 == 0 then exit because opposites values
+stw v0, GSA(t5)
+
+exit:
+ret
+
+; END: get_input
+
+
+; BEGIN: draw_array
+draw_array:
+	addi sp, sp, -4
+    stw ra, 0(sp)
+    call clear_leds
+	ldw ra, 0(sp)
+    addi sp, sp, 4
+	
+	addi a0, zero,0
+	addi a1, zero,0
+	br for_loop_x
+
+	for_loop_x: ; loop x 
+	addi t0,zero,12   
+	blt a0,t0, for_loop_y
+	ret
+
+	for_loop_y:     ; loop on y
+	addi t1,zero,8 
+	blt a1,t1, light_pixel
+	addi a0,a0,1
+	addi a1,zero,0
+	br for_loop_x
+	
+
+	light_pixel:
+	slli t5,a0,3
+	add t6,t5,a1
+	slli t6,t6,2
+	ldw t3, GSA(t6)
+	bne t3,zero, pixel_up
+	addi a1,a1,1
+	br for_loop_y
+
+	pixel_up:
+	addi sp, sp, -4
+    stw ra, 0(sp)
+    call set_pixel
+	ldw ra, 0(sp)
+    addi sp, sp, 4
+	addi a1,a1,1
+	br for_loop_y
+	
+ 
+; END: draw_array
+
+
+; BEGIN: move_snake
+move_snake:
+
+    ldw t0, HEAD_X(zero)
+    ldw t1, HEAD_Y(zero)
+    slli t2, t0, 3
+    add t4, t2, t1 
+    slli t4, t4, 2;index head
+
+    ldw t5, GSA(t4)
+    cmpeqi t0, t5, 0b0001 ;move left head
+    cmpeqi t1, t5, 0b0010 ;move up head
+    cmpeqi t2, t5, 0b0011 ;move down head 
+    cmpeqi t3, t5, 0b0100 ;move right head
+
+    ldw t6, HEAD_X(zero)
+    ldw t7, HEAD_Y(zero)
+    sub t6, t6, t0 ;HEAD_X - t0
+    add t6, t6, t3 ;HEAD_X + t3
+    sub t7, t7, t1 ;HEAD_Y - t1
+    add t7, t7, t2 ;HEAD_Y + t2
+
+    stw t6, HEAD_X(zero) ;update the value of HEAD_X
+    stw t7, HEAD_Y(zero) ;update the value of HEAD_Y
+
+    slli t0, t6, 3
+    add t1, t0, t7
+    slli t1, t1, 2 ;index new head
+    ldw t2, GSA(t4)
+    stw t2, GSA(t1) ;direction of the new head = old head
+
+    addi t0, zero, 1
+    bne t0, a0, tail
+	ret
+
+    ;TAIL
+	tail:
+    ldw t0, TAIL_X(zero)
+    ldw t1, TAIL_Y(zero)
+    slli t2, t0, 3
+    add t5, t2, t1 
+    slli t5, t5, 2 ;index tail
+
+    ldw t6, GSA(t5)
+    stw zero, GSA(t5)
+    cmpeqi t0, t6, 0b0001 ;move left tail
+    cmpeqi t1, t6, 0b0010 ;move up tail
+    cmpeqi t2, t6, 0b0011 ;move down tail 
+    cmpeqi t3, t6, 0b0100 ;move right tail
+
+    ldw t6, TAIL_X(zero)
+    ldw t7, TAIL_Y(zero)
+    sub t6, t6, t0 ;TAIL_X - t0
+    add t6, t6, t3 ;TAIL_X + t3
+    sub t7, t7, t1 ;TAIL_Y - t1
+    add t7, t7, t2 ;TAIL_Y + t2
+
+    stw t6, TAIL_X(zero) ;update the value of TAIL_X
+    stw t7, TAIL_Y(zero) ;update the value of TAIL_Y
+
+
+    ret
+; END: move_snake
+
+
+; BEGIN: save_checkpoint
+
+memory_copy:
+
+ldw t0, 0(a0)
+stw t0, 0(a1)
+ret
+
+save_checkpoint:
+
+addi sp, sp, -4
+stw ra, 0(sp)
+
+ldw t0, SCORE(zero)
+
+for_counter_mod10_check_cp:  ; modulo 10
+addi t0,t0,-10
+blt zero,t0,for_counter_mod10_check_cp
+
+addi t0, t0, 10
+
+cmpeq v0, t0, zero
+bne v0, zero, save
+
+ldw ra,0(sp)
+addi sp,sp,4
+
+ret
+
+save:
+addi t1, zero, 1
+stw t1, CP_VALID(zero)
+addi a0, zero, HEAD_X
+addi a1, zero, CP_HEAD_X
+call memory_copy
+addi a0, zero, HEAD_Y
+addi a1, zero, CP_HEAD_Y
+call memory_copy
+addi a0, zero, TAIL_X
+addi a1, zero, CP_TAIL_X
+call memory_copy
+addi a0, zero, TAIL_Y
+addi a1, zero, CP_TAIL_Y
+call memory_copy
+addi a0, zero, SCORE
+addi a1, zero, CP_SCORE
+call memory_copy
+addi a0, zero, GSA
+addi a1, zero, CP_GSA
+
+
+
+loop_GSA_2:
+ldw t3, GSA(t0)
+stw t3, CP_GSA(t0)
+addi t0,t0,4
+bne t0, t7, loop_GSA_2
+
+ret
+
+
+; END: save_checkpoint
+
+
+; BEGIN: restore_checkpoint
+restore_checkpoint:
+
+addi sp, sp, -4
+stw ra, 0(sp)
+
+ldw t0, CP_VALID(zero)
+
+addi t2, zero, 1
+beq t0, t2, restore
+add v0, zero, t0
+
+ldw ra,0(sp)
+addi sp,sp,4
+
+ret 
+
+restore:
+addi a0,zero, CP_HEAD_X
+addi a1, zero, HEAD_X
+call memory_copy
+addi a0,zero, CP_HEAD_Y
+addi a1, zero, HEAD_Y
+call memory_copy
+addi a0,zero, CP_TAIL_X
+addi a1, zero, TAIL_X
+call memory_copy
+addi a0,zero, CP_TAIL_Y
+addi a1, zero, TAIL_Y
+call memory_copy
+addi a0,zero, CP_SCORE
+addi a1, zero, SCORE
+call memory_copy
+
+addi t0,zero,0
+addi t1,zero,384
+
+loop_GSA_1:
+ldw t2, CP_GSA(t0)
+stw t2, GSA(t0)
+addi t0,t0,4
+bne t0, t1, loop_GSA_1
+
+ret
+
+; END: restore_checkpoint
+
+
+; BEGIN: blink_score
+blink_score:
+
+addi sp, sp, -4
+stw ra, 0(sp)
+
+stw zero, SEVEN_SEGS(zero)
+stw zero, SEVEN_SEGS+4(zero)
+stw zero, SEVEN_SEGS+8(zero)
+stw zero, SEVEN_SEGS+12(zero)
+
+call wait
+call display_score
+
+ldw ra,0(sp)
+addi sp,sp,4
+ret
+
+wait:
+addi t0,zero,0
+addi t1,zero,1
+slli t1,t1,22
+counter:	
+addi t0,t0,1
+beq t0,t1, exit1
+br counter
+
+exit1:
+ret
+; END: blink_score
+
+digit_map:
+.word 0xFC ; 0
+.word 0x60 ; 1
+.word 0xDA ; 2
+.word 0xF2 ; 3
+.word 0x66 ; 4
+.word 0xB6 ; 5
+.word 0xBE ; 6
+.word 0xE0 ; 7
+.word 0xFE ; 8
+.word 0xF6 ; 9
+
